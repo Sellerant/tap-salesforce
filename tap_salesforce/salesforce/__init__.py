@@ -211,6 +211,7 @@ class Salesforce():
                  quota_percent_total=None,
                  is_sandbox=None,
                  select_fields_by_default=None,
+                 crmObjectFilters=None,
                  default_start_date=None,
                  api_type=None,
                  lookback_window=None):
@@ -222,6 +223,7 @@ class Salesforce():
         self.sf_client_secret = sf_client_secret
         self.session = requests.Session()
         self.access_token = None
+        self.crmObjectFilters=crmObjectFilters
         self.instance_url = None
         if isinstance(quota_percent_per_run, str) and quota_percent_per_run.strip() == '':
             quota_percent_per_run = None
@@ -339,6 +341,8 @@ class Salesforce():
         self.access_token = raw_credentials['access_token']
         self.instance_url = raw_credentials['instance_url']
 
+    def get_crm_object_filters(self):
+        return self.crmObjectFilters
 
     def describe(self, sobject=None):
         """Describes all objects or a specific object"""
@@ -385,19 +389,24 @@ class Salesforce():
             sync_start_date = singer_utils.strftime(singer_utils.strptime_with_tz(sync_start_date) - datetime.timedelta(seconds=self.lookback_window))
 
         return sync_start_date
-
+        
     def _build_query_string(self, catalog_entry, start_date, end_date=None, order_by_clause=True):
         selected_properties = self._get_selected_properties(catalog_entry)
-
-        query = "SELECT {} FROM {}".format(",".join(selected_properties), catalog_entry['stream'])
+        query = "SELECT {} FROM {} ".format(",".join(selected_properties), catalog_entry['stream'])
 
         catalog_metadata = metadata.to_map(catalog_entry['metadata'])
-        replication_key = catalog_metadata.get((), {}).get('replication-key')
+        replication_key = catalog_metadata.get((), {}).get('valid-replication-keys', [None])[0]
+
+        where_clause = ""
+        filters = self.get_crm_object_filters()
 
         if replication_key:
-            where_clause = " WHERE {} >= {} ".format(
-                replication_key,
-                start_date)
+            if catalog_entry['stream'] in filters:
+                filter_query = filters[catalog_entry['stream']]
+                where_clause = " WHERE {} AND {} >= {} ".format(filter_query, replication_key, start_date)
+            else:
+                where_clause = " WHERE {} >= {} ".format(replication_key, start_date)
+
             if end_date:
                 end_date_clause = " AND {} < {}".format(replication_key, end_date)
             else:
@@ -405,11 +414,25 @@ class Salesforce():
 
             order_by = " ORDER BY {} ASC".format(replication_key)
             if order_by_clause:
-                return query + where_clause + end_date_clause + order_by
-
-            return query + where_clause + end_date_clause
+                final_query = query + where_clause + end_date_clause + order_by
+                return final_query
+            else:
+                final_query = query + where_clause + end_date_clause
+                return final_query
         else:
-            return query
+            if catalog_entry['stream'] not in filters:
+                where_clause = " WHERE 1 = 1 AND {} >= {} ".format(start_date)
+            else:
+                filter_query = filters[catalog_entry['stream']]
+                where_clause = " WHERE {} >= {} ".format(filter_query, start_date)
+
+            if end_date:
+                end_date_clause = " AND {} < {}".format(start_date, end_date)
+            else:
+                end_date_clause = ""
+
+            final_query = query + where_clause + end_date_clause
+            return final_query
 
     def query(self, catalog_entry, state):
         if self.api_type == BULK_API_TYPE:
