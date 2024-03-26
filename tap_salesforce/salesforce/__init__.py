@@ -223,7 +223,7 @@ class Salesforce():
         self.sf_client_secret = sf_client_secret
         self.session = requests.Session()
         self.access_token = None
-        self.crmObjectFilters=crmObjectFilters
+        self.crmObjectFilters = crmObjectFilters
         self.instance_url = None
         if isinstance(quota_percent_per_run, str) and quota_percent_per_run.strip() == '':
             quota_percent_per_run = None
